@@ -46,14 +46,14 @@ def main():
 
     j = 1
     for i in tweets:
-        sheet1.write(j, 0, i[0])
-        sheet1.write(j, 1, i[1])
-        sheet1.write(j, 2, i[2])
-        sheet1.write(j, 3, i[3])
+        sheet1.write(j, 0, i[0]) # Ticker - stock being tweeted about
+        sheet1.write(j, 1, i[1]) # date of tweet
         print(i[1])
+        sheet1.write(j, 2, i[2]) # User - person who tweeted
+        sheet1.write(j, 3, i[3]) # Tweet content
         j+=1
 
-    wb.save('output.xls')
+    wb.save('output.xls') # writing data to output file
 
 
 if(__name__ == "__main__"):
