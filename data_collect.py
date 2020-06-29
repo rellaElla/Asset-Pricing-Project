@@ -4,6 +4,7 @@ import time
 import pandas as pd
 import xlwt
 from xlwt import Workbook
+import datetime
 
 consumer_key = os.environ['twitter_consumer_key']
 consumer_secret = os.environ['twitter_consumer_secret']
@@ -14,27 +15,68 @@ auth = tweepy.OAuthHandler(consumer_key, consumer_secret)
 auth.set_access_token(access_key, access_secret)
 api = tweepy.API(auth, wait_on_rate_limit=True, wait_on_rate_limit_notify=True)
 
-def analyze(tickers):
+def limit_handled(cursor):
+    while True:
+        try:
+            yield cursor.next()
+        except tweepy.RateLimitError:
+            time.sleep(60)
+
+def analyze(tickers,user):
     ret = []
     for s in tickers:
-        ret.append(get_tweets(s))
+        ret.append(get_tweets2(s, user))
     return ret
 
-def get_tweets(ticker, count = 1000):
+def get_tweets(ticker):
 
     ret = []
     tweets = []
 
     q=str(ticker)
-    # fetched_tweets = api.search(q, count = count, lang="en")
-    fetched_tweets = tweepy.Cursor(api.search, q="$XOM", count = 100, lang="en", tweet_mode='extended').items()
 
-    for tweet in fetched_tweets:
-        if(tweet.full_text not in tweets): # filtering out duplicate tweets
-            tweets.append(tweet.full_text)
-            date = str(tweet.created_at)
-            t = (ticker, date, tweet.user.screen_name, tweet.full_text, tweet.retweet_count)
-            ret.append(t)
+    fetched_tweets = api.search(q="$XOM", lang="en", tweet_mode='extended', count=10000)
+    tweets.extend(fetched_tweets)
+    oldest_id = fetched_tweets[-1].id
+
+    while True:
+        t = api.search(q="$XOM", lang="en", tweet_mode='extended', count=10000, max_id=oldest_id-1)
+        if len(t) == 0:
+            break
+        oldest_id = t[-1].id
+        tweets.extend(t)
+    for tweet in tweets:
+        date = str(tweet.created_at)
+        t = (ticker, date, tweet.user.screen_name, tweet.full_text, tweet.retweet_count)
+        ret.append(t)
+
+
+    return ret
+
+def get_tweets2(ticker, userID):
+
+    tweets = api.user_timeline(screen_name=userID,count=10000, q=ticker, tweet_mode = 'extended')
+    all_tweets = []
+    ret = []
+    all_tweets.extend(tweets)
+    oldest_id = tweets[-1].id
+    while True:
+        tweets = api.user_timeline(screen_name=userID,
+                               count=10000,
+                               max_id = oldest_id - 1,
+                               q=ticker,
+                               tweet_mode = 'extended'
+                               )
+        if len(tweets) == 0:
+            break
+        oldest_id = tweets[-1].id
+        all_tweets.extend(tweets)
+
+    for tweet in all_tweets:
+        date = str(tweet.created_at)
+        t = (ticker, date, tweet.user.screen_name, tweet.full_text, tweet.retweet_count)
+        ret.append(t)
+
 
     return ret
 
@@ -64,8 +106,10 @@ def write(tweets):
 
 def main():
 
-    tickers = ["$XOM","$SNAP","$BA","$AAPL","$FB"] # companies to analyze
-    tweets = analyze(tickers) # gathering tweets about the companies
+    # tickers = ["$XOM","$SNAP","$BA","$AAPL","$FB"] # companies to analyze
+    tickers = ["$XOM"]
+    #tweets = analyze(tickers) # gathering tweets about the companies
+    tweets = analyze(tickers, "CNBC")
     write(tweets) # writing data to .xls file
 
 if(__name__ == "__main__"):
