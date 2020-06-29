@@ -32,7 +32,6 @@ from tensorflow.keras.preprocessing.sequence import pad_sequences
 def preprocess(texts, quiet=False):
   """
   Takes in tweets as a pd.Series. quiet=True will return time to clean data. Returns pd.Series. 
-
   Operations:
   1. All text lowercase
   2. Replace special characterize
@@ -90,11 +89,9 @@ class Dataset(object):
   label_col: str
   text_col: str
   dataframe: pd.DataFrame
-
   Properties:
   data: returns raw data
   cleaned_data: returns cleaned data
-
   Methods:
   load: fetches csv file using filename
   preprocess_texts: calls preprocess on self.dataframe
@@ -166,8 +163,9 @@ spatial_dropout: float = 0.3
 filters: int = 128
 kernel_size:int = 3
 
-# Create input and output layers for LSTM; output is a 1D Spatial Dropout 
+# Create input and output layers for LSTM
 input_layer: tf.Tensor = Input(shape=(input_length,))
+
 output_layer: tf.Tensor = Embedding(input_dim=input_dim, 
                                     output_dim=embedding_dim,
                                     input_shape=(input_length,)
@@ -179,6 +177,7 @@ output_layer: tf.Tensor = Bidirectional(LSTM(lstm_units, return_sequences=True,
                                               dropout=lstm_dropout, 
                                               recurrent_dropout=recurrent_dropout)
                                               )(output_layer)
+                                              
 output_layer: tf.Tensor = Conv1D(filters, kernel_size=kernel_size, 
                                           padding='valid',
                                           kernel_initializer='glorot_uniform'
@@ -189,7 +188,7 @@ avg_pool: tf.Tensor = GlobalAveragePooling1D()(output_layer)
 max_pool: tf.Tensor = GlobalMaxPooling1D()(output_layer)
 output_layer: tf.Tensor = concatenate([avg_pool, max_pool])
 
-# Add final dense layer to predict classesb (deeply connected layer)
+# Add final dense layer to predict classes (deeply connected layer)
 output_layer: tf.Tensor = Dense(num_classes, activation='softmax')(output_layer)
 
 # Initialize model 
