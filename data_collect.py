@@ -22,10 +22,11 @@ def limit_handled(cursor):
         except tweepy.RateLimitError:
             time.sleep(60)
 
-def analyze(tickers,user):
+def analyze(tickers, sources):
     ret = []
     for s in tickers:
-        ret.append(get_tweets2(s, user))
+        for source in sources:
+            ret.append(get_tweets2(s, source))
     return ret
 
 def get_tweets(ticker):
@@ -108,8 +109,9 @@ def main():
 
     # tickers = ["$XOM","$SNAP","$BA","$AAPL","$FB"] # companies to analyze
     tickers = ["$XOM"]
+    sources = ["CNBC", "Stocktwits", "Benzinga", "WSJmarkets"]
     #tweets = analyze(tickers) # gathering tweets about the companies
-    tweets = analyze(tickers, "CNBC")
+    tweets = analyze(tickers, sources)
     write(tweets) # writing data to .xls file
 
 if(__name__ == "__main__"):
