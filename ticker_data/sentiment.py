@@ -28,6 +28,8 @@ from tensorflow.keras.layers import Bidirectional, Conv1D, Dense, concatenate
 from tensorflow.keras.models import Model
 from tensorflow.keras.preprocessing.sequence import pad_sequences
 
+from tensorboard.plugins.hparams import api as hp
+
 
 def preprocess(texts, quiet=False):
   """
@@ -120,120 +122,209 @@ class Dataset(object):
   def preprocess_texts(self, quiet=False):
     self.dataframe['cleaned'] = preprocess(self.dataframe[self.text_col], quiet)
 
-# Set path
-sys.path.append(Path(os.path.join(os.path.abspath(''), '.../')).resolve().as_posix())
+def train_test_model(hparams):
+  print('Retrieivng Data')
+  x_train, y_train, x_validation, y_validation, unique_vals = datawork()
 
-# Find dataset and preprocess it 
-dataset_path: Path = Path('.../ticker_data/sentiment_data/aapl_sentiment.csv').resolve()
-dataset: Dataset = Dataset(dataset_path)
-dataset.load()
-dataset.preprocess_texts()
+  file_to_open: Path = Path('.../ticker_data/sentiment_data/tokenizer.pickle').resolve()
+  with file_to_open.open('rb') as file:
+      tokenizer = pickle.load(file)
 
-# Set number of words and tokenize
-num_words: int = 50000
-tokenizer: Tokenizer = Tokenizer(num_words=num_words, lower=True)
-tokenizer.fit_on_texts(dataset.cleaned_data.text)
+  # Set model hyperparameters/dimensions
+  input_dim: int = min(tokenizer.num_words, len(tokenizer.word_index) + 1)
+  num_classes:int  = len(unique_vals)
+  input_length: int = 100
 
-# Save tokenized data to disk
-file_to_save: Path = Path('.../ticker_data/sentiment_data/tokenizer.pickle').resolve()
-with file_to_save.open('wb') as file:
-    pickle.dump(tokenizer, file)
 
-# Copy the cleaned dataset to prevent pandas issues
-data: pd.DataFrame = dataset.cleaned_data.copy()
-train: pd.DataFrame = pd.DataFrame(columns=['label', 'text'])
-validation: pd.DataFrame = pd.DataFrame(columns=['label', 'text'])
+  #embedding_dim: int = 500
+  #lstm_units: int = 256
+  #lstm_dropout: float = 0.15
+  #recurrent_dropout: float = 0.1
+  #spatial_dropout: float = 0.3
+  #filters: int = 128
+  #kernel_size:int = 3
 
-# Retrieve indices and split data for each label
-for label in data.label.unique():
-    label_data: pd.Index = data[data.label == label]
-    train_data, validation_data = train_test_split(label_data, test_size=0.3)
-    train: pd.DataFrame = pd.concat([train, train_data])
-    validation: pd.DataFrame = pd.concat([validation, validation_data])
+  # Create input and output layers for LSTM
+  input_layer: tf.Tensor = Input(shape=(input_length,))
 
-# Set model hyperparameters/dimensions
-input_dim: int = min(tokenizer.num_words, len(tokenizer.word_index) + 1)
-num_classes:int  = len(data.label.unique())
-embedding_dim: int = 500
-input_length: int = 100
-lstm_units: int = 256
-lstm_dropout: float = 0.15
-recurrent_dropout: float = 0.1
-spatial_dropout: float = 0.3
-filters: int = 128
-kernel_size:int = 3
+  output_layer: tf.Tensor = Embedding(input_dim=input_dim, 
+                                      output_dim=hparams[HP_EMBEDDING_DIM],
+                                      input_shape=(input_length,)
+                                      )(input_layer)
 
-# Create input and output layers for LSTM
-input_layer: tf.Tensor = Input(shape=(input_length,))
+  output_layer: tf.Tensor = SpatialDropout1D(hparams[HP_SPATIAL_DROPOUT])(output_layer)
 
-output_layer: tf.Tensor = Embedding(input_dim=input_dim, 
-                                    output_dim=embedding_dim,
-                                    input_shape=(input_length,)
-                                    )(input_layer)
+  output_layer: tf.Tensor = Bidirectional(LSTM(hparams[HP_LSTM_UNITS], return_sequences=True, 
+                                                dropout=hparams[HP_LSTM_DROPOUT], 
+                                                recurrent_dropout=hparams[HP_RECURRENT_DROPOUT])
+                                                )(output_layer)
+                                                
+  output_layer: tf.Tensor = Conv1D(hparams[HP_FILTERS], kernel_size=hparams[HP_KERNEL_SIZE], 
+                                            padding='valid',
+                                            kernel_initializer='glorot_uniform'
+                                            )(output_layer)
 
-output_layer: tf.Tensor = SpatialDropout1D(spatial_dropout)(output_layer)
+  # Create global and max pooling to merge features across timesteps 
+  avg_pool: tf.Tensor = GlobalAveragePooling1D()(output_layer)
+  max_pool: tf.Tensor = GlobalMaxPooling1D()(output_layer)
+  output_layer: tf.Tensor = concatenate([avg_pool, max_pool])
 
-output_layer: tf.Tensor = Bidirectional(LSTM(lstm_units, return_sequences=True, 
-                                              dropout=lstm_dropout, 
-                                              recurrent_dropout=recurrent_dropout)
-                                              )(output_layer)
-                                              
-output_layer: tf.Tensor = Conv1D(filters, kernel_size=kernel_size, 
-                                          padding='valid',
-                                          kernel_initializer='glorot_uniform'
-                                          )(output_layer)
+  # Add final dense layer to predict classes (deeply connected layer)
+  output_layer: tf.Tensor = Dense(num_classes, activation='softmax')(output_layer)
 
-# Create global and max pooling to merge features across timesteps 
-avg_pool: tf.Tensor = GlobalAveragePooling1D()(output_layer)
-max_pool: tf.Tensor = GlobalMaxPooling1D()(output_layer)
-output_layer: tf.Tensor = concatenate([avg_pool, max_pool])
+  # Initialize model 
+  model: tf.keras.Model = Model(input_layer, output_layer)
 
-# Add final dense layer to predict classes (deeply connected layer)
-output_layer: tf.Tensor = Dense(num_classes, activation='softmax')(output_layer)
 
-# Initialize model 
-model: tf.keras.Model = Model(input_layer, output_layer)
-model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
-model.summary()
+  # Set batch size and number of epochs
+  batch_size: int = 128
+  epochs: int = 10
 
-# Generate train and validation samples
-train_sequences: list = [text.split() for text in train.text]
-validation_sequences: list = [text.split() for text in validation.text]
+  model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
+  model.summary()
 
-# Tokenize these lists 
-list_tokenized_train: list = tokenizer.texts_to_sequences(train_sequences)
-list_tokenized_validation: list = tokenizer.texts_to_sequences(validation_sequences)
+  # Fit model 
+  model.fit(
+            x_train, 
+            y=y_train,
+            batch_size=batch_size,
+            epochs=epochs,
+            validation_data=(x_validation, y_validation)
+  )
 
-# Transform data to numpy array of shape (num_samples, num_timesteps)
-x_train: np.ndarray = pad_sequences(list_tokenized_train, maxlen=input_length)
-x_validation: np.ndarray = pad_sequences(list_tokenized_validation, maxlen=input_length)
+  _, accuracy = model.evaluate(x_validation, y_validation)
 
-# Does 1vAll Binarization 
-encoder: LabelBinarizer = LabelBinarizer()
-encoder.fit(data.label.unique())
+  return model, accuracy
 
-# Save encoder to disk 
-encoder_path: Path = Path('.../ticker_data/sentiment_data/encoder.pickle').resolve()
-with encoder_path.open('wb') as file:
-    pickle.dump(encoder, file)
+def datawork():
+  input_length: int = 100
+  # Set path
+  sys.path.append(Path(os.path.join(os.path.abspath(''), '.../')).resolve().as_posix())
 
-# Get transformed values for 1vAll classification 
-y_train: np.ndarray = encoder.transform(train.label.values.astype(str))
-y_validation: np.ndarray = encoder.transform(validation.label.values.astype(str))
+  # Find dataset and preprocess it 
+  dataset_path: Path = Path('.../ticker_data/sentiment_data/aapl_sentiment.csv').resolve()
+  dataset: Dataset = Dataset(dataset_path)
+  dataset.load()
+  dataset.preprocess_texts()
 
-# Set batch size and number of epochs
-batch_size: int = 128
-epochs: int = 3
+  # Set number of words and tokenize
+  num_words: int = 50000
+  tokenizer: Tokenizer = Tokenizer(num_words=num_words, lower=True)
+  tokenizer.fit_on_texts(dataset.cleaned_data.text)
 
-# Fit model 
-model.fit(
-          x_train, 
-          y=y_train,
-          batch_size=batch_size,
-          epochs=epochs,
-          validation_data=(x_validation, y_validation)
-)
+  # Save tokenized data to disk
+  file_to_save: Path = Path('.../ticker_data/sentiment_data/tokenizer.pickle').resolve()
+  with file_to_save.open('wb') as file:
+      pickle.dump(tokenizer, file)
 
-# Save best model's parameters to disk 
-model_file: Path = Path('.../ticker_data/models/model_weights.h5').resolve()
-model.save_weights(model_file.as_posix())
+  # Copy the cleaned dataset to prevent pandas issues
+  data: pd.DataFrame = dataset.cleaned_data.copy()
+  train: pd.DataFrame = pd.DataFrame(columns=['label', 'text'])
+  validation: pd.DataFrame = pd.DataFrame(columns=['label', 'text'])
+
+  # Retrieve indices and split data for each label
+  for label in data.label.unique():
+      label_data: pd.Index = data[data.label == label]
+      train_data, validation_data = train_test_split(label_data, test_size=0.3)
+      train: pd.DataFrame = pd.concat([train, train_data])
+      validation: pd.DataFrame = pd.concat([validation, validation_data])
+
+  # Generate train and validation samples
+  train_sequences: list = [text.split() for text in train.text]
+  validation_sequences: list = [text.split() for text in validation.text]
+
+  # Tokenize these lists 
+  list_tokenized_train: list = tokenizer.texts_to_sequences(train_sequences)
+  list_tokenized_validation: list = tokenizer.texts_to_sequences(validation_sequences)
+
+  # Transform data to numpy array of shape (num_samples, num_timesteps)
+  x_train: np.ndarray = pad_sequences(list_tokenized_train, maxlen=input_length)
+  x_validation: np.ndarray = pad_sequences(list_tokenized_validation, maxlen=input_length)
+
+  # Does 1vAll Binarization 
+  encoder: LabelBinarizer = LabelBinarizer()
+  encoder.fit(data.label.unique())
+
+  # Save encoder to disk 
+  encoder_path: Path = Path('.../ticker_data/sentiment_data/encoder.pickle').resolve()
+  with encoder_path.open('wb') as file:
+      pickle.dump(encoder, file)
+
+  # Get transformed values for 1vAll classification 
+  y_train: np.ndarray = encoder.transform(train.label.values.astype(str))
+  y_validation: np.ndarray = encoder.transform(validation.label.values.astype(str))
+
+  return x_train, y_train, x_validation, y_validation, data.label.unique()
+
+# Tuneable Hyperparameters
+HP_EMBEDDING_DIM: int = hp.HParam('embedding_dim', hp.Discrete([400, 500, 700]))
+HP_LSTM_UNITS: int = hp.HParam('lstm_units', hp.Discrete([128, 256, 512]))
+HP_LSTM_DROPOUT: float = hp.HParam('lstm_dropout', hp.RealInterval(0.1, 0.5))
+HP_RECURRENT_DROPOUT: float = hp.HParam('recurrent_dropout', hp.RealInterval(0.1, 0.5))
+HP_SPATIAL_DROPOUT: float = hp.HParam('spatial_dropout', hp.RealInterval(0.1, 0.5))
+HP_FILTERS: int = hp.HParam('filters', hp.Discrete([64, 128, 256]))
+HP_KERNEL_SIZE: int = hp.HParam('kernel_size', hp.Discrete([3]))
+
+# Metric we'll use 
+METRIC_ACCURACY = 'accuracy'
+
+with tf.summary.create_file_writer('logs/hparam_tuning').as_default():
+  hp.hparams_config(
+    hparams=[HP_EMBEDDING_DIM, 
+              HP_LSTM_UNITS, 
+              HP_LSTM_DROPOUT,
+              HP_RECURRENT_DROPOUT,
+              HP_SPATIAL_DROPOUT,
+              HP_FILTERS,
+              HP_KERNEL_SIZE],
+    metrics=[hp.Metric(METRIC_ACCURACY, display_name='Accuracy')],
+  )
+
+
+# Function to run hparams testing
+def run(run_dir, hparams, best_run):
+  with tf.summary.create_file_writer(run_dir).as_default():
+    hp.hparams(hparams)  # record the values used in this trial
+    model, accuracy = train_test_model(hparams)
+    
+    if accuracy > best_run:
+      # Save best model's parameters to disk 
+      model_file: Path = Path('.../ticker_data/models/model_weights.h5').resolve()
+      model.save_weights(model_file.as_posix())
+
+
+    tf.summary.scalar(METRIC_ACCURACY, accuracy, step=1)
+  
+  return accuracy
+
+best_accuracy = 0
+# Loops to iterate over all hyperparameters
+session_num = 0
+for embedding_dim in HP_EMBEDDING_DIM.domain.values:
+  for lstm_units in HP_LSTM_UNITS.domain.values:
+    for lstm_dropout in (HP_LSTM_DROPOUT.domain.min_value, HP_LSTM_DROPOUT.domain.max_value):
+      for recurrent_dropout in (HP_RECURRENT_DROPOUT.domain.min_value, HP_RECURRENT_DROPOUT.domain.max_value):
+        for spatial_dropout in (HP_SPATIAL_DROPOUT.domain.min_value, HP_RECURRENT_DROPOUT.domain.max_value):
+          for filt in HP_FILTERS.domain.values:
+            for kernel in HP_KERNEL_SIZE.domain.values:
+                  hparams = {
+                    HP_EMBEDDING_DIM: embedding_dim,
+                    HP_LSTM_UNITS: lstm_units,
+                    HP_LSTM_DROPOUT: lstm_dropout,
+                    HP_RECURRENT_DROPOUT: recurrent_dropout,
+                    HP_SPATIAL_DROPOUT: spatial_dropout,
+                    HP_FILTERS: filt,
+                    HP_KERNEL_SIZE:  kernel 
+                    }
+
+                  run_name = "run-%d" % session_num
+                  print('--- Starting trial: %s' % run_name)
+                  print({h.name: hparams[h] for h in hparams})
+                  acc = run('logs/hparam_tuning/' + run_name, hparams, best_accuracy)
+
+                  if acc > best_accuracy:
+                        best_accuracy = acc
+                  session_num += 1
+
+
+
