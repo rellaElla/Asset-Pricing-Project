@@ -178,7 +178,7 @@ def train_test_model(hparams):
 
   # Set batch size and number of epochs
   batch_size: int = 128
-  epochs: int = 10
+  epochs: int = 10 
 
   model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
   model.summary()
