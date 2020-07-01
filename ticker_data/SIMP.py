@@ -34,12 +34,13 @@ from tensorboard.plugins.hparams import api as hp
 from preprocess import preprocess
 
 class SIMP(object):
-    def __init__(self):
-        pass
+    def __init__(self, tweets = None, labels = None):
+        if tweets and labels:
+            self.X_train, self.X_val, self.y_train, self.y_val = train_test_split(padded_tweets, encoded_labels)
 
-    def fetch_data(self, file_name: str, input_length: int = 100, save_tokenizer: bool = False, save_encoder = False):
+    def fetch_data(self, file_name: str, input_length: int = 100, save_tokenizer: bool = False, save_encoder = False, quiet = False, save_data = True):
         """
-        Takes in tweets as a pd.Series. quiet=True will return time to clean data. Returns pd.Series. 
+        Takes in file_name as a string. quiet=False will return time to clean data. 
         Operations:
         1. All text lowercase
         2. Replace special characterize
@@ -48,6 +49,7 @@ class SIMP(object):
         5. Change contractions to full words
         6. Remove English stopwords
         7. Stem tweets 
+        8. Split into train/val sets
         """
         sys.path.append(Path(os.path.join(os.path.abspath(''), '.../')).resolve().as_posix())
 
@@ -57,7 +59,7 @@ class SIMP(object):
         print('Retrieivng Data')
         df: pd.DataFrame = pd.read_csv(dataset_path, encoding='latin-1')
         print('Data Found: Beginning Preprocessing')
-        df['text'] = preprocess(df['text'])
+        df['text'] = preprocess(df['text'], quiet = quiet)
 
         tweets: pd.DataFrame = df.text.to_numpy()
         labels: pd.DataFrame = df.label.to_numpy()
@@ -96,15 +98,37 @@ class SIMP(object):
                 pickle.dump(encoder, file)
 
         encoded_labels: np.ndarray = encoder.transform(labels.astype(str))
+
+        if save_data:
+            tweet_path = Path('.../data/padded_tweets.pickle').resolve()
+
+            with tweet_path.open('wb') as file:
+                pickle.dump(padded_tweets, file)
+
+            label_path = Path('.../data/labels.pickle').resolve()
+            
+            with label_path.open('wb') as file:
+                pickle.dump(padded_tweets, file)
+
+            print('Data Saved to data folder')
+
         # Split into train and val
         self.X_train, self.X_val, self.y_train, self.y_val = train_test_split(padded_tweets, encoded_labels)
 
-        # self.X_train = X_train.reshape(-1,1)
-        # self.y_train = y_train.reshape(-1,1)
-        # self.X_val = X_val.reshape(-1,1)
-        # self.y_val = y_val.reshape(-1,1)
-
     def _train_model(self, hparams):
+        """
+        Helper Method to compile model for Hyperparemter search. 
+
+        Structure of Sentiment Inference Machine Program:
+
+        Input Layer
+        Embedding Layer
+        Spatial Dropout Layer
+        Bidrectional LSTM 
+        Convolutional 1D Layer
+        Max and Average Pooling Layer
+        Dense Layer 
+        """
         input_dim: int = min(self.tokenizer.num_words, len(self.tokenizer.word_index) + 1)
         num_classes:int  = len(self.unique_labels)
 
@@ -139,10 +163,6 @@ class SIMP(object):
         # Initialize model 
         model: tf.keras.Model = Model(input_layer, output_layer)
 
-        # Set batch size and number of epochs
-        batch_size: int = 128
-        epochs: int = 10 
-
         model.compile(loss='categorical_crossentropy', optimizer='adam', metrics=['accuracy'])
         model.summary()
 
@@ -150,8 +170,8 @@ class SIMP(object):
         model.fit(
                     self.X_train, 
                     y=self.y_train,
-                    batch_size=batch_size,
-                    epochs=epochs,
+                    batch_size=self.batch_size,
+                    epochs=self.epochs,
                     validation_data=(self.X_val, self.y_val)
         )
 
@@ -167,8 +187,15 @@ class SIMP(object):
         HP_SPATIAL_DROPOUT: float = hp.HParam('spatial_dropout', hp.RealInterval(0.1, 0.5)),
         HP_FILTERS: int = hp.HParam('filters', hp.Discrete([64, 128, 256])),
         HP_KERNEL_SIZE: int = hp.HParam('kernel_size', hp.Discrete([3])),
-        METRIC = 'accuracy'
+        METRIC = 'accuracy',
+        batch_size = 128,
+        epochs = 10
     ):
+        """
+        Tunes model hyperparameters from a given keras.hparams distribution. Default metric is accuracy but can be changed.
+
+        CAREFUL: Runtime is exceptionally long. 
+        """
         self.HP_EMBEDDING_DIM: int = HP_EMBEDDING_DIM
         self.HP_LSTM_UNITS: int = HP_LSTM_UNITS
         self.HP_LSTM_DROPOUT: float = HP_LSTM_DROPOUT
@@ -177,6 +204,8 @@ class SIMP(object):
         self.HP_FILTERS: int = HP_FILTERS
         self.HP_KERNEL_SIZE: int = HP_KERNEL_SIZE
         self.METRIC: str = METRIC
+        self.batch_size = batch_size
+        self.epochs = epochs
 
         with tf.summary.create_file_writer('logs/hparam_tuning').as_default():
             hp.hparams_config(
@@ -237,7 +266,7 @@ class SIMP(object):
 
 model = SIMP()
 model.fetch_data('master_df.csv')
-model.tune_model()
+model.tune_model(batch_size = 256, epochs = 2)
 
 
 
